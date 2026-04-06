@@ -1,0 +1,18 @@
+anthropic
+datasets
+openai
+Pillow
+python-dotenv
+tqdm
+
+# Local Qwen3.5 inference & SFT training
+# Qwen3.5 requires transformers from main (for the Gated DeltaNet architecture):
+#   pip install "transformers @ git+https://github.com/huggingface/transformers.git@main"
+transformers
+accelerate
+peft
+trl
+bitsandbytes
+tensorboard
+torch
+torchvision

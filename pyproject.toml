@@ -1,0 +1,13 @@
+[project]
+name = "rft-loca-data-gen"
+version = "0.1.0"
+description = "ScreenSpot GUI-grounding evaluation & RFT data generation"
+requires-python = ">=3.11"
+dependencies = [
+    "anthropic",
+    "datasets",
+    "openai",
+    "Pillow",
+    "python-dotenv",
+    "tqdm",
+]
