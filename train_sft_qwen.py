@@ -31,7 +31,8 @@ import wandb
 from dotenv import load_dotenv
 
 load_dotenv()
-from datasets import Dataset, load_dataset
+from datasets import load_dataset
+from torch.utils.data import Dataset as TorchDataset
 from peft import LoraConfig
 from PIL import Image
 from transformers import AutoModelForImageTextToText, AutoProcessor
@@ -83,8 +84,25 @@ def _split_reasoning(raw_response: str, coords: list[float]) -> tuple[str, str]:
     return reasoning, click_text
 
 
-def build_sft_dataset(records: list[dict], mode: str) -> Dataset:
-    """Build an HF Dataset with ``messages`` + ``images`` columns.
+class SFTDataset(TorchDataset):
+    """Simple map-style dataset that avoids Arrow serialisation issues
+    with mixed-type message ``content`` fields (str vs list[dict])."""
+
+    def __init__(
+        self, messages_list: list[list[dict]], images_list: list[list[Image.Image]],
+    ) -> None:
+        self.messages_list = messages_list
+        self.images_list = images_list
+
+    def __len__(self) -> int:
+        return len(self.messages_list)
+
+    def __getitem__(self, idx: int) -> dict:
+        return {"messages": self.messages_list[idx], "images": self.images_list[idx]}
+
+
+def build_sft_dataset(records: list[dict], mode: str) -> SFTDataset:
+    """Build a dataset with ``messages`` + ``images`` columns.
 
     The 122B model's raw reasoning is placed into the assistant message's
     ``reasoning_content`` field so the Qwen3.5 chat template renders it
@@ -138,7 +156,7 @@ def build_sft_dataset(records: list[dict], mode: str) -> Dataset:
         f"Built dataset with {len(messages_list)} training examples "
         f"({n_with_reasoning} with reasoning traces)"
     )
-    return Dataset.from_dict({"messages": messages_list, "images": images_list})
+    return SFTDataset(messages_list, images_list)
 
 
 # ── Collate function ──────────────────────────────────────────────────────
