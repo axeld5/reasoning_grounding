@@ -2,10 +2,10 @@
 
 Trains on correct samples from the 122B model evaluation (hit=true in
 train_results.jsonl).  Uses TRL's SFTTrainer with a LoRA adapter and
-2-GPU DDP via accelerate.
+2-GPU FSDP via accelerate.
 
 Usage:
-    # 2-GPU DDP training (recommended)
+    # 2-GPU FSDP training (recommended)
     accelerate launch --config_file accelerate_config.yaml train_sft_qwen.py
 
     # Single-GPU (for testing)
@@ -161,7 +161,7 @@ def build_sft_dataset(records: list[dict], mode: str) -> SFTDataset:
 
 # ── Collate function ──────────────────────────────────────────────────────
 
-def make_collate_fn(processor: AutoProcessor, max_length: int = 4096):
+def make_collate_fn(processor: AutoProcessor):
     """Return a collate function that tokenises VLM conversations.
 
     Loss is computed on the **assistant response only** (reasoning + CLICK).
@@ -250,13 +250,11 @@ def main() -> None:
 
     # Training
     p.add_argument("--epochs", type=int, default=3)
-    p.add_argument("--batch-size", type=int, default=4,
+    p.add_argument("--batch-size", type=int, default=1,
                     help="Per-device train batch size")
-    p.add_argument("--grad-accum", type=int, default=4,
+    p.add_argument("--grad-accum", type=int, default=16,
                     help="Gradient accumulation steps")
     p.add_argument("--lr", type=float, default=2e-5)
-    p.add_argument("--max-length", type=int, default=4096,
-                    help="Max sequence length (incl. image + reasoning tokens)")
 
     # Weights & Biases
     p.add_argument("--wandb-project", default="screenspot-sft",
@@ -318,7 +316,6 @@ def main() -> None:
                 "batch_size": args.batch_size,
                 "grad_accum": args.grad_accum,
                 "lr": args.lr,
-                "max_length": args.max_length,
                 "train_samples": len(dataset),
                 "deduplicate": args.deduplicate,
             },
@@ -344,10 +341,9 @@ def main() -> None:
         remove_unused_columns=False,
         dataset_kwargs={"skip_prepare_dataset": True},
         dataloader_pin_memory=True,
-        ddp_find_unused_parameters=False,
     )
 
-    collate_fn = make_collate_fn(processor, max_length=args.max_length)
+    collate_fn = make_collate_fn(processor)
 
     # ── Train ─────────────────────────────────────────────────────────────
     trainer = SFTTrainer(
