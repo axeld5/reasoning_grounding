@@ -28,6 +28,9 @@ from pathlib import Path
 
 import torch
 import wandb
+from dotenv import load_dotenv
+
+load_dotenv()
 from datasets import Dataset, load_dataset
 from peft import LoraConfig
 from PIL import Image

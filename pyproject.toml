@@ -11,3 +11,16 @@ dependencies = [
     "python-dotenv",
     "tqdm",
 ]
+
+[project.optional-dependencies]
+train = [
+    "torch",
+    "torchvision",
+    "transformers",
+    "accelerate",
+    "peft",
+    "trl",
+    "bitsandbytes",
+    "tensorboard",
+    "wandb",
+]
