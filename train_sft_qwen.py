@@ -106,7 +106,9 @@ class SFTDataset(TorchDataset):
         return {"messages": self.messages_list[idx], "images": self.images_list[idx]}
 
 
-def build_sft_dataset(records: list[dict], mode: str) -> SFTDataset:
+def build_sft_dataset(
+    records: list[dict], mode: str, max_pixels: int | None = None,
+) -> SFTDataset:
     """Build a dataset with ``messages`` + ``images`` columns.
 
     The 122B model's raw reasoning is placed into the assistant message's
@@ -126,6 +128,7 @@ def build_sft_dataset(records: list[dict], mode: str) -> SFTDataset:
     messages_list: list[list[dict]] = []
     images_list: list[list[Image.Image]] = []
     n_with_reasoning = 0
+    n_filtered = 0
 
     for r in records:
         coords = r.get("predicted_coords_norm")
@@ -154,17 +157,16 @@ def build_sft_dataset(records: list[dict], mode: str) -> SFTDataset:
             },
         ]
 
-        messages_list.append(messages)
-        images_list.append([image_cache[r["idx"]]])
+        img = image_cache[r["idx"]]
+        if max_pixels is not None and img.width * img.height > max_pixels:
+            n_filtered += 1
+            continue
 
-    # Sort by image pixel count so similar-length sequences group together,
-    # reducing padding waste and surfacing any OOM-sized samples early.
-    pixel_counts = [
-        img.width * img.height for imgs in images_list for img in imgs
-    ]
-    order = sorted(range(len(messages_list)), key=lambda i: pixel_counts[i])
-    messages_list = [messages_list[i] for i in order]
-    images_list = [images_list[i] for i in order]
+        messages_list.append(messages)
+        images_list.append([img])
+
+    if max_pixels is not None and n_filtered:
+        print(f"Filtered {n_filtered} samples exceeding {max_pixels:,} pixels")
 
     print(
         f"Built dataset with {len(messages_list)} training examples "
@@ -269,6 +271,9 @@ def main() -> None:
     p.add_argument("--grad-accum", type=int, default=16,
                     help="Gradient accumulation steps")
     p.add_argument("--lr", type=float, default=2e-5)
+    p.add_argument("--max-pixels", type=int, default=1_500_000,
+                    help="Skip images exceeding this pixel count to avoid OOM "
+                         "(default 1.5M ≈ 1500×1000; set 0 to disable)")
 
     # Weights & Biases
     p.add_argument("--wandb-project", default="screenspot-sft",
@@ -284,7 +289,8 @@ def main() -> None:
 
     # ── Data ──────────────────────────────────────────────────────────────
     records = load_correct_samples(args.results, deduplicate=args.deduplicate)
-    dataset = build_sft_dataset(records, args.mode)
+    max_px = args.max_pixels if args.max_pixels > 0 else None
+    dataset = build_sft_dataset(records, args.mode, max_pixels=max_px)
 
     # ── Model + processor ─────────────────────────────────────────────────
     print(f"Loading model: {args.model_id}")
@@ -360,21 +366,7 @@ def main() -> None:
     collate_fn = make_collate_fn(processor)
 
     # ── Train ─────────────────────────────────────────────────────────────
-    class OOMSafeSFTTrainer(SFTTrainer):
-        """Skip batches that trigger CUDA OOM instead of crashing."""
-
-        def training_step(self, model, inputs, num_items_in_batch=None):
-            try:
-                return super().training_step(model, inputs, num_items_in_batch)
-            except (torch.OutOfMemoryError, RuntimeError) as e:
-                if "out of memory" not in str(e).lower():
-                    raise
-                torch.cuda.empty_cache()
-                seq_len = inputs.get("input_ids", torch.empty(0)).shape[-1]
-                print(f"\n⚠ OOM at seq_len={seq_len}, skipping batch")
-                return torch.tensor(0.0, device=model.device, requires_grad=True)
-
-    trainer = OOMSafeSFTTrainer(
+    trainer = SFTTrainer(
         model=model,
         args=training_args,
         train_dataset=dataset,
