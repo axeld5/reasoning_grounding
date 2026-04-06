@@ -23,4 +23,7 @@ train = [
     "bitsandbytes",
     "tensorboard",
     "wandb",
+    "ninja",
+    "causal-conv1d",
+    "flash-linear-attention",
 ]
