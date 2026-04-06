@@ -21,11 +21,13 @@ All hyperparameters have sensible defaults for 2×H100.  The script:
 
 import argparse
 import json
+import os
 import re
 from collections import OrderedDict
 from pathlib import Path
 
 import torch
+import wandb
 from datasets import Dataset, load_dataset
 from peft import LoraConfig
 from PIL import Image
@@ -237,6 +239,16 @@ def main() -> None:
     p.add_argument("--max-length", type=int, default=4096,
                     help="Max sequence length (incl. image + reasoning tokens)")
 
+    # Weights & Biases
+    p.add_argument("--wandb-project", default="screenspot-sft",
+                    help="W&B project name")
+    p.add_argument("--wandb-run-name", default=None,
+                    help="W&B run name (auto-generated if omitted)")
+    p.add_argument("--wandb-entity", default=None,
+                    help="W&B team/user entity")
+    p.add_argument("--no-wandb", action="store_true",
+                    help="Disable W&B logging (TensorBoard only)")
+
     args = p.parse_args()
 
     # ── Data ──────────────────────────────────────────────────────────────
@@ -264,6 +276,35 @@ def main() -> None:
         task_type="CAUSAL_LM",
     )
 
+    # ── Weights & Biases ────────────────────────────────────────────────────
+    use_wandb = not args.no_wandb
+    report_to = ["tensorboard", "wandb"] if use_wandb else ["tensorboard"]
+
+    if use_wandb:
+        os.environ["WANDB_PROJECT"] = args.wandb_project
+        if args.wandb_entity:
+            os.environ["WANDB_ENTITY"] = args.wandb_entity
+
+        wandb.init(
+            project=args.wandb_project,
+            entity=args.wandb_entity,
+            name=args.wandb_run_name,
+            config={
+                "model_id": args.model_id,
+                "mode": args.mode,
+                "lora_r": args.lora_r,
+                "lora_alpha": args.lora_alpha,
+                "lora_dropout": args.lora_dropout,
+                "epochs": args.epochs,
+                "batch_size": args.batch_size,
+                "grad_accum": args.grad_accum,
+                "lr": args.lr,
+                "max_length": args.max_length,
+                "train_samples": len(dataset),
+                "deduplicate": args.deduplicate,
+            },
+        )
+
     # ── SFT config ────────────────────────────────────────────────────────
     training_args = SFTConfig(
         output_dir=args.output_dir,
@@ -280,7 +321,7 @@ def main() -> None:
         logging_steps=5,
         save_strategy="epoch",
         save_total_limit=2,
-        report_to="tensorboard",
+        report_to=report_to,
         remove_unused_columns=False,
         dataset_kwargs={"skip_prepare_dataset": True},
         dataloader_pin_memory=True,
@@ -305,6 +346,9 @@ def main() -> None:
     trainer.save_model(args.output_dir)
     processor.save_pretrained(args.output_dir)
     print(f"\nAdapter + processor saved to {Path(args.output_dir).resolve()}")
+
+    if use_wandb:
+        wandb.finish()
 
 
 if __name__ == "__main__":

@@ -14,5 +14,6 @@ peft
 trl
 bitsandbytes
 tensorboard
+wandb
 torch
 torchvision
