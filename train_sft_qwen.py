@@ -202,8 +202,6 @@ def make_collate_fn(processor: AutoProcessor, max_length: int = 4096):
             images=all_images,
             return_tensors="pt",
             padding=True,
-            truncation=True,
-            max_length=max_length,
         )
 
         labels = batch["input_ids"].clone()
