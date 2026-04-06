@@ -32,10 +32,14 @@ os.environ.setdefault(
 os.environ.setdefault("TRITON_MAX_AUTOTUNER_CONFIGS", "2")
 
 import torch
-import wandb
 from dotenv import load_dotenv
 
 load_dotenv()
+
+try:
+    import wandb
+except ImportError:
+    wandb = None
 from datasets import load_dataset
 from torch.utils.data import Dataset as TorchDataset
 from peft import LoraConfig
@@ -271,9 +275,9 @@ def main() -> None:
     p.add_argument("--grad-accum", type=int, default=16,
                     help="Gradient accumulation steps")
     p.add_argument("--lr", type=float, default=2e-5)
-    p.add_argument("--max-pixels", type=int, default=1_500_000,
+    p.add_argument("--max-pixels", type=int, default=8_500_000,
                     help="Skip images exceeding this pixel count to avoid OOM "
-                         "(default 1.5M ≈ 1500×1000; set 0 to disable)")
+                         "(default 8.5M keeps ≤4K images, ~96%% of data; set 0 to disable)")
 
     # Weights & Biases
     p.add_argument("--wandb-project", default="screenspot-sft",
@@ -314,7 +318,10 @@ def main() -> None:
     )
 
     # ── Weights & Biases ────────────────────────────────────────────────────
-    use_wandb = not args.no_wandb
+    use_wandb = not args.no_wandb and wandb is not None
+    if not args.no_wandb and wandb is None:
+        print("wandb not installed — logging to TensorBoard only. "
+              "Install with: pip install wandb")
     report_to = ["tensorboard", "wandb"] if use_wandb else ["tensorboard"]
 
     if use_wandb:
@@ -382,7 +389,7 @@ def main() -> None:
     processor.save_pretrained(args.output_dir)
     print(f"\nAdapter + processor saved to {Path(args.output_dir).resolve()}")
 
-    if use_wandb:
+    if use_wandb and wandb is not None:
         wandb.finish()
 
 
