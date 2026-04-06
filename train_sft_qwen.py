@@ -26,6 +26,11 @@ import re
 from collections import OrderedDict
 from pathlib import Path
 
+os.environ.setdefault(
+    "PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True,max_split_size_mb:256",
+)
+os.environ.setdefault("TRITON_MAX_AUTOTUNER_CONFIGS", "2")
+
 import torch
 import wandb
 from dotenv import load_dotenv
@@ -151,6 +156,15 @@ def build_sft_dataset(records: list[dict], mode: str) -> SFTDataset:
 
         messages_list.append(messages)
         images_list.append([image_cache[r["idx"]]])
+
+    # Sort by image pixel count so similar-length sequences group together,
+    # reducing padding waste and surfacing any OOM-sized samples early.
+    pixel_counts = [
+        img.width * img.height for imgs in images_list for img in imgs
+    ]
+    order = sorted(range(len(messages_list)), key=lambda i: pixel_counts[i])
+    messages_list = [messages_list[i] for i in order]
+    images_list = [images_list[i] for i in order]
 
     print(
         f"Built dataset with {len(messages_list)} training examples "
@@ -346,7 +360,21 @@ def main() -> None:
     collate_fn = make_collate_fn(processor)
 
     # ── Train ─────────────────────────────────────────────────────────────
-    trainer = SFTTrainer(
+    class OOMSafeSFTTrainer(SFTTrainer):
+        """Skip batches that trigger CUDA OOM instead of crashing."""
+
+        def training_step(self, model, inputs, num_items_in_batch=None):
+            try:
+                return super().training_step(model, inputs, num_items_in_batch)
+            except (torch.OutOfMemoryError, RuntimeError) as e:
+                if "out of memory" not in str(e).lower():
+                    raise
+                torch.cuda.empty_cache()
+                seq_len = inputs.get("input_ids", torch.empty(0)).shape[-1]
+                print(f"\n⚠ OOM at seq_len={seq_len}, skipping batch")
+                return torch.tensor(0.0, device=model.device, requires_grad=True)
+
+    trainer = OOMSafeSFTTrainer(
         model=model,
         args=training_args,
         train_dataset=dataset,

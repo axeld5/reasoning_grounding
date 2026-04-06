@@ -12,12 +12,23 @@ Supports multiple models (Claude, Qwen 3 VL, Qwen 3.5 VL), multi-rollout voting,
 curl -LsSf https://astral.sh/uv/install.sh | sh   # macOS/Linux
 powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"  # Windows
 
-# Create venv and install dependencies
+# Create venv and install dependencies (eval only)
 uv sync
+
+# Or install with training dependencies (torch, accelerate, trl, etc.)
+uv sync --extra train
 
 # Configure API keys (copy .env.example or set directly)
 cp .env.example .env
 # Then fill in your keys in .env
+```
+
+### System dependencies for training
+
+The training extras include CUDA extensions (`causal-conv1d`, `flash-linear-attention`) that compile from source. On a fresh GPU server you may need:
+
+```bash
+apt-get update && apt-get install -y python3-dev ninja-build
 ```
 
 ### Required environment variables
@@ -27,6 +38,7 @@ cp .env.example .env
 | `ANTHROPIC_API_KEY` | `--model claude` |
 | `OPENROUTER_API_KEY` | `--model qwen3vl` or `--model qwen3.5vl` |
 | `HF_TOKEN` | If gated datasets require authentication |
+| `WANDB_API_KEY` | W&B logging during training (free at [wandb.ai](https://wandb.ai)) |
 
 ## Usage
 
@@ -84,6 +96,46 @@ uv run python eval_screenspot.py -n 50 --zoom-in --crop-ratio 0.4
 | `qwen3vl` | Qwen3-VL-235B-A22B | OpenRouter | 235B (22B active) |
 | `qwen3.5vl` | Qwen3.5-122B-A10B | OpenRouter | 122B (10B active), native VL |
 
+## SFT Training
+
+Fine-tune Qwen3.5-4B on correct predictions from the 122B teacher model using LoRA + FSDP.
+
+```bash
+# 2-GPU FSDP training (recommended)
+accelerate launch --config_file accelerate_config.yaml train_sft_qwen.py
+
+# Single-GPU
+python train_sft_qwen.py --batch-size 1 --grad-accum 16
+
+# Custom W&B run name
+accelerate launch --config_file accelerate_config.yaml train_sft_qwen.py \
+    --wandb-project my-project --wandb-run-name "lora-r16-lr2e5"
+
+# Disable W&B (TensorBoard only)
+accelerate launch --config_file accelerate_config.yaml train_sft_qwen.py --no-wandb
+```
+
+### Training CLI reference
+
+| Flag | Default | Description |
+|---|---|---|
+| `--results PATH` | `train_results.jsonl` | Results JSONL from 122B model evaluation |
+| `-m, --mode {normal,pro}` | `pro` | ScreenSpot variant |
+| `--deduplicate` | off | Keep one sample per unique image |
+| `--model-id ID` | `Qwen/Qwen3.5-4B` | HuggingFace model ID |
+| `--output-dir DIR` | `qwen35_4b_screenspot_lora` | Output directory for adapter |
+| `--lora-r N` | `16` | LoRA rank |
+| `--lora-alpha N` | `32` | LoRA alpha |
+| `--lora-dropout F` | `0.05` | LoRA dropout |
+| `--epochs N` | `3` | Training epochs |
+| `--batch-size N` | `1` | Per-device batch size |
+| `--grad-accum N` | `16` | Gradient accumulation steps |
+| `--lr F` | `2e-5` | Learning rate |
+| `--wandb-project NAME` | `screenspot-sft` | W&B project name |
+| `--wandb-run-name NAME` | auto | W&B run name |
+| `--wandb-entity NAME` | none | W&B team/user entity |
+| `--no-wandb` | off | Disable W&B logging |
+
 ## Project structure
 
 ```
@@ -107,7 +159,9 @@ eval/               Evaluation orchestration
   runner.py           Top-level run_evaluation()
 
 metrics.py          Accuracy, pass@k, majority vote, breakdown reporting
-eval_screenspot.py  CLI entrypoint
+eval_screenspot.py  CLI entrypoint (evaluation)
+train_sft_qwen.py  CLI entrypoint (SFT + LoRA training)
+accelerate_config.yaml  FSDP multi-GPU config for accelerate
 ```
 
 ## Output format
